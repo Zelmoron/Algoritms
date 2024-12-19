@@ -5,17 +5,19 @@ from functools import lru_cache
 
 class Gomoku:
     def __init__(self, size: int = 20, win_length: int = 5, difficulty: int = 60):
-        self.size = size
-        self.win_length = win_length
-        self.board = np.zeros((size, size), dtype=np.int8)
-        self.current_player = 1
-        self.move_count = 0
-        self.difficulty = max(1, min(10, difficulty))
-        self.last_move = None
-        
+        self.size = size  # Размер доски
+        self.win_length = win_length  # Длина последовательности для победы
+        self.board = np.zeros((size, size), dtype=np.int8)  # Создание пустой доски
+        self.current_player = 1  # Игрок, который делает ход (1 или -1)
+        self.move_count = 0  # Количество сделанных ходов
+        self.difficulty = max(1, min(10, difficulty))  # Установка сложности игры
+        self.last_move = None  # Последний сделанный ход
+
+        # Генерация списка всех индексов на доске
         self.board_indices = [(i, j) for i in range(size) for j in range(size)]
-        self.directions = [(1, 0), (0, 1), (1, 1), (1, -1)]
-        
+        self.directions = [(1, 0), (0, 1), (1, 1), (1, -1)]  # Направления для проверки последовательностей
+
+        # Весовые коэффициенты для оценки позиций на доске
         self.weights = {
             5: 1_000_000,
             4: 100_000,
@@ -27,55 +29,59 @@ class Gomoku:
         }
 
     def is_valid_coord(self, x: int, y: int) -> bool:
+        # Проверка, находятся ли координаты в пределах доски
         return 0 <= x < self.size and 0 <= y < self.size
 
     @lru_cache(maxsize=1024)
     def check_sequence(self, x: int, y: int, dx: int, dy: int, player: int) -> Tuple[int, bool]:
-        count = 1
-        blocked_ends = 0
-        
-        # Check forward direction
+        # Проверка последовательности одинаковых фишек в заданном направлении
+        count = 1  # Количество фишек в последовательности
+        blocked_ends = 0  # Количество заблокированных концов последовательности
+
+        # Проверка вперед по направлению
         x1, y1 = x + dx, y + dy
         while self.is_valid_coord(x1, y1) and self.board[x1][y1] == player:
             count += 1
             x1, y1 = x1 + dx, y1 + dy
         if not (self.is_valid_coord(x1, y1) and self.board[x1][y1] == 0):
             blocked_ends += 1
-            
-        # Check backward direction
+
+        # Проверка назад по направлению
         x1, y1 = x - dx, y - dy
         while self.is_valid_coord(x1, y1) and self.board[x1][y1] == player:
             count += 1
             x1, y1 = x1 - dx, y1 - dy
         if not (self.is_valid_coord(x1, y1) and self.board[x1][y1] == 0):
             blocked_ends += 1
-            
-        return count, blocked_ends < 2
+
+        return count, blocked_ends < 2  # Возвращение количества фишек и информации о заблокированных концах
 
     def evaluate_position(self, x: int, y: int, player: int) -> int:
+        # Оценка позиции для заданного игрока
         if not self.is_valid_coord(x, y):
             return 0
-            
-        score = 0
+
+        score = 0  # Начальное значение оценки
         for dx, dy in self.directions:
             length, is_open = self.check_sequence(x, y, dx, dy, player)
-            
+
             if length >= self.win_length:
-                return self.weights[5]  # Early return for winning position
+                return self.weights[5]  # Ранний выход для выигрышной позиции
             elif length == 4:
                 score += self.weights[4] if is_open else self.weights['4b']
             elif length == 3:
                 score += self.weights[3] if is_open else self.weights['3b']
             elif length == 2:
                 score += self.weights[2] if is_open else self.weights['2b']
-                    
-        return score
+
+        return score  # Возвращение окончательной оценки позиции
 
     def get_valid_moves(self) -> List[Tuple[int, int]]:
+        # Получение списка допустимых ходов
         if self.move_count == 0:
-            return [(self.size // 2, self.size // 2)]
+            return [(self.size // 2, self.size // 2)]  # Первый ход в центр доски
 
-        # Quick win/block check
+        # Быстрая проверка на возможность выигрыша или блокировки противника
         for player in [self.current_player, -self.current_player]:
             for i, j in self.get_nearby_empty_cells():
                 if self.would_win(i, j, player):
@@ -83,7 +89,7 @@ class Gomoku:
 
         moves = []
         seen = set()
-        
+
         for i, j in self.get_nearby_empty_cells():
             if (i, j) not in seen:
                 attack_score = self.evaluate_position(i, j, self.current_player)
@@ -91,11 +97,12 @@ class Gomoku:
                 score = max(attack_score, defense_score)
                 moves.append((score, (i, j)))
                 seen.add((i, j))
-        
+
         moves.sort(reverse=True)
         return [move for _, move in moves[:max(5, self.difficulty * 2)]]
 
     def get_nearby_empty_cells(self) -> List[Tuple[int, int]]:
+        # Получение списка пустых клеток рядом с занятыми
         nearby = set()
         for i, j in self.board_indices:
             if self.board[i][j] != 0:
@@ -107,6 +114,7 @@ class Gomoku:
         return list(nearby)
 
     def would_win(self, x: int, y: int, player: int) -> bool:
+        # Проверка, приведет ли ход к победе
         self.board[x][y] = player
         is_win = any(self.check_sequence(x, y, dx, dy, player)[0] >= self.win_length 
                     for dx, dy in self.directions)
@@ -114,6 +122,7 @@ class Gomoku:
         return is_win
 
     def make_move(self, x: int, y: int) -> bool:
+        # Совершение хода
         if self.is_valid_coord(x, y) and self.board[x][y] == 0:
             self.board[x][y] = self.current_player
             self.move_count += 1
@@ -123,16 +132,18 @@ class Gomoku:
         return False
 
     def get_ai_move(self) -> Tuple[int, int]:
+        # Получение хода для ИИ
         valid_moves = self.get_valid_moves()
         if len(valid_moves) == 1:
             return valid_moves[0]
         
-        depth = max(2, min(self.difficulty // 2, 4))
+        depth = max(2, min(self.difficulty // 2, 6))  # Увеличение глубины поиска до 6
         _, move = self.minimax(depth, float('-inf'), float('inf'), True)
         return move if move else valid_moves[0]
 
     def minimax(self, depth: int, alpha: float, beta: float, maximizing: bool) -> Tuple[int, Optional[Tuple[int, int]]]:
-        if depth == 0:
+        # Алгоритм minimax с альфа-бета отсечением
+        if depth == 0 or self.is_winner(self.current_player) or self.is_winner(-self.current_player):
             return self.evaluate_board(), None
 
         valid_moves = self.get_valid_moves()
@@ -161,7 +172,7 @@ class Gomoku:
             for move in valid_moves:
                 self.board[move[0]][move[1]] = self.current_player
                 self.current_player *= -1
-                eval_score, _ = self.minimax(depth - 1, alpha, beta, False)
+                eval_score, _ = self.minimax(depth - 1, alpha, beta, True)
                 self.current_player *= -1
                 self.board[move[0]][move[1]] = 0
                 
@@ -174,6 +185,7 @@ class Gomoku:
             return min_eval, best_move
 
     def evaluate_board(self) -> int:
+        # Оценка текущего состояния доски
         if self.last_move is None:
             return 0
             
@@ -189,6 +201,7 @@ class Gomoku:
         return score
 
     def is_winner(self, player: int) -> bool:
+        # Проверка, выиграл ли игрок
         if self.last_move is None:
             return False
         x, y = self.last_move
@@ -196,6 +209,7 @@ class Gomoku:
                   for dx, dy in self.directions)
 
     def print_board(self):
+        # Печать доски
         symbols = {0: '.', 1: 'X', -1: 'O'}
         print('   ', end='')
         for i in range(self.size):
@@ -209,9 +223,10 @@ class Gomoku:
             print()
 
 def play_game():
+    # Функция для игры в Гомоку
     print("Выберите сложность игры:")
     difficulty = int(input("Введите число от 1 до 10: "))
-    while not 1 <= difficulty <= 1000:
+    while not 1 <= difficulty <= 10:
         print("Неверная сложность! Выберите число от 1 до 10.")
         difficulty = int(input("Выберите сложность от 1 до 10: "))
         

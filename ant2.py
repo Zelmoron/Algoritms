@@ -86,6 +86,7 @@ def plot_optimization_progress(distances_history, pheromone_history, probabiliti
     ax1.grid(True)
     ax1.legend()
     
+    pheromone_history.sort()
     ax2.plot(pheromone_history, 'r-', linewidth=1, label='Средний уровень феромонов')
     ax2.set_title('Динамика феромонов на лучшем маршруте')
     ax2.set_xlabel('Итерация')
@@ -93,6 +94,8 @@ def plot_optimization_progress(distances_history, pheromone_history, probabiliti
     ax2.grid(True)
     ax2.legend()
     
+
+
     ax3.plot(probabilities_history, 'g-', linewidth=1, label='Макс. вероятность')
     ax3.set_title('Изменение максимальной вероятности выбора города')
     ax3.set_xlabel('Итерация')
