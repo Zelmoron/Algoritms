@@ -1,105 +1,76 @@
 import numpy as np
 from typing import Tuple, Optional, List
 import time
+from functools import lru_cache
+import matplotlib.pyplot as plt
+import networkx as nx
+import scipy as sp
 
 class Gomoku:
-    def __init__(self, size: int = 20, win_length: int = 5, difficulty: int = 5):
-        self.size = size
-        self.win_length = win_length
-        self.board = np.zeros((size, size), dtype=int)
-        self.current_player = 1
-        self.move_count = 0
-        self.difficulty = max(1, min(10, difficulty))
-        
-        # Улучшенные веса для разных паттернов
+    #Добавить оценку на разрыв
+    def __init__(self, size: int = 20, win_length: int = 5, difficulty: int = 60):
+        self.size = size  # Размер доски
+        self.win_length = win_length  # Длина последовательности для победы
+        self.board = np.zeros((size, size), dtype=np.int8)  # Создание пустой доски
+        self.current_player = 1  # Игрок, который делает ход (1 или -1)
+        self.move_count = 0  # Количество сделанных ходов
+        self.difficulty = max(1, min(10, difficulty))  # Установка сложности игры
+        self.last_move = None  # Последний сделанный ход
+
+        # Генерация списка всех индексов на доске
+        self.board_indices = [(i, j) for i in range(size) for j in range(size)]
+        self.directions = [(1, 0), (0, 1), (1, 1), (1, -1)]  # Направления для проверки последовательностей
+
+        # Весовые коэффициенты для оценки позиций на доске
         self.weights = {
-            5: 1000000000,     # Выигрышная комбинация
-            '5b': 500000000,   # Блокированная пятерка
-            4: 100000000,      # Открытая четверка
-            '4b': 1000000,     # Блокированная четверка
-            3: 100000,         # Открытая тройка
-            '3b': 10000,       # Блокированная тройка
-            2: 1000,           # Открытая двойка
-            '2b': 100,         # Блокированная двойка
-            'fork': 5000000    # Вилка (множественная угроза)
+            5: 1_000_000,
+            4: 100_000,
+            '4b': 10_000,
+            3: 1_000,
+            '3b': 100,
+            2: 10,
+            '2b': 1
         }
-        
-        self.directions = [(1, 0), (0, 1), (1, 1), (1, -1)]
-        self.pattern_cache = {}
-        self.threat_cache = {}
-        self.center_weight = 2.0  # Вес для центральных позиций
-        self.history_table = {}   # Таблица истории ходов для улучшения альфа-бета отсечений
 
-    def get_pattern_key(self, x: int, y: int, dx: int, dy: int, length: int) -> str:
-        """Получает ключ паттерна для определенной последовательности."""
-        pattern = []
-        for i in range(-length, length + 1):
-            nx, ny = x + i * dx, y + i * dy
-            if 0 <= nx < self.size and 0 <= ny < self.size:
-                pattern.append(str(self.board[nx][ny]))
-            else:
-                pattern.append('x')  # out of bounds
-        return ''.join(pattern)
+    def is_valid_coord(self, x: int, y: int) -> bool:
+        # Проверка, находятся ли координаты в пределах доски
+        return 0 <= x < self.size and 0 <= y < self.size
 
-    def detect_fork(self, x: int, y: int, player: int) -> bool:
-        """Определяет наличие вилки (множественной угрозы)."""
-        threats = 0
-        self.board[x][y] = player
-        
-        # Проверяем угрозы по всем направлениям
-        for dx, dy in self.directions:
-            pattern = self.get_pattern_key(x, y, dx, dy, 4)
-            if pattern in self.threat_cache:
-                threats += self.threat_cache[pattern]
-            else:
-                # Проверяем на открытую четверку или тройку
-                length, is_open = self.check_sequence(x, y, dx, dy, player)
-                if (length == 4 and is_open) or (length == 3 and is_open):
-                    threats += 1
-                self.threat_cache[pattern] = threats
-        
-        self.board[x][y] = 0
-        return threats >= 2
-
+    @lru_cache(maxsize=1024)
     def check_sequence(self, x: int, y: int, dx: int, dy: int, player: int) -> Tuple[int, bool]:
-        key = (x, y, dx, dy, player)
-        if key in self.pattern_cache:
-            return self.pattern_cache[key]
+        # Проверка последовательности одинаковых фишек в заданном направлении
+        count = 1  # Количество фишек в последовательности
+        blocked_ends = 0  # Количество заблокированных концов последовательности
 
-        count = 1
-        blocked_ends = 0
-        
-        # Проверка в одном направлении
+        # Проверка вперед по направлению
         x1, y1 = x + dx, y + dy
-        while 0 <= x1 < self.size and 0 <= y1 < self.size and self.board[x1][y1] == player:
+        while self.is_valid_coord(x1, y1) and self.board[x1][y1] == player:
             count += 1
-            x1 += dx
-        if not (0 <= x1 < self.size and 0 <= y1 < self.size and self.board[x1][y1] == 0):
+            x1, y1 = x1 + dx, y1 + dy
+        if not (self.is_valid_coord(x1, y1) and self.board[x1][y1] == 0):
             blocked_ends += 1
-            
-        # Проверка в противоположном направлении
+
+        # Проверка назад по направлению
         x1, y1 = x - dx, y - dy
-        while 0 <= x1 < self.size and 0 <= y1 < self.size and self.board[x1][y1] == player:
+        while self.is_valid_coord(x1, y1) and self.board[x1][y1] == player:
             count += 1
-            x1 -= dx
-        if not (0 <= x1 < self.size and 0 <= y1 < self.size and self.board[x1][y1] == 0):
+            x1, y1 = x1 - dx, y1 - dy
+        if not (self.is_valid_coord(x1, y1) and self.board[x1][y1] == 0):
             blocked_ends += 1
-            
-        result = (count, blocked_ends < 2)
-        self.pattern_cache[key] = result
-        return result
+
+        return count, blocked_ends < 2  # Возвращение количества фишек и информации о заблокированных концах
 
     def evaluate_position(self, x: int, y: int, player: int) -> int:
-        if not (0 <= x < self.size and 0 <= y < self.size):
+        # Оценка позиции для заданного игрока
+        if not self.is_valid_coord(x, y):
             return 0
-            
-        score = 0
-        # Базовая оценка
+
+        score = 0  # Начальное значение оценки
         for dx, dy in self.directions:
             length, is_open = self.check_sequence(x, y, dx, dy, player)
-            
+
             if length >= self.win_length:
-                score += self.weights[5]
+                return self.weights[5]  # Ранний выход для выигрышной позиции
             elif length == 4:
                 score += self.weights[4] if is_open else self.weights['4b']
             elif length == 3:
@@ -107,36 +78,162 @@ class Gomoku:
             elif length == 2:
                 score += self.weights[2] if is_open else self.weights['2b']
 
-        # Дополнительные факторы оценки
-        if self.detect_fork(x, y, player):
-            score += self.weights['fork']
-            
-        # Учет центральности позиции
-        center_x, center_y = self.size // 2, self.size // 2
-        distance_to_center = abs(x - center_x) + abs(y - center_y)
-        center_bonus = (self.size - distance_to_center) * self.center_weight
-        score += center_bonus
+        return score  # Возвращение окончательной оценки позиции
+
+    def get_valid_moves(self) -> List[Tuple[int, int]]:
+        # Получение списка допустимых ходов
+        if self.move_count == 0:
+            return [(self.size // 2, self.size // 2)]  # Первый ход в центр доски
+
+        # Быстрая проверка на возможность выигрыша или блокировки противника
+        for player in [self.current_player, -self.current_player]:
+            for i, j in self.get_nearby_empty_cells():
+                if self.would_win(i, j, player):
+                    return [(i, j)]
+
+        moves = []
+        seen = set()
+
+        for i, j in self.get_nearby_empty_cells():
+            if (i, j) not in seen:
+                attack_score = self.evaluate_position(i, j, self.current_player)
+                defense_score = self.evaluate_position(i, j, -self.current_player)
+                score = max(attack_score, defense_score)
+                moves.append((score, (i, j)))
+                seen.add((i, j))
+
+        moves.sort(reverse=True)
+        return [move for _, move in moves[:max(5, self.difficulty * 2)]]
+
+    def get_nearby_empty_cells(self) -> List[Tuple[int, int]]:
+        # Получение списка пустых клеток рядом с занятыми
+        nearby = set()
+        for i, j in self.board_indices:
+            if self.board[i][j] != 0:
+                for di in range(-2, 3):
+                    for dj in range(-2, 3):
+                        ni, nj = i + di, j + dj
+                        if self.is_valid_coord(ni, nj) and self.board[ni][nj] == 0:
+                            nearby.add((ni, nj))
+        return list(nearby)
+
+    def would_win(self, x: int, y: int, player: int) -> bool:
+        # Проверка, приведет ли ход к победе
+        self.board[x][y] = player
+        is_win = any(self.check_sequence(x, y, dx, dy, player)[0] >= self.win_length 
+                    for dx, dy in self.directions)
+        self.board[x][y] = 0
+        return is_win
+
+    def make_move(self, x: int, y: int) -> bool:
+        # Совершение хода
+        if self.is_valid_coord(x, y) and self.board[x][y] == 0:
+            self.board[x][y] = self.current_player
+            self.move_count += 1
+            self.last_move = (x, y)
+            self.check_sequence.cache_clear()
+            return True
+        return False
+
+    def get_ai_move(self) -> Tuple[int, int]:
+        valid_moves = self.get_valid_moves()
+        if len(valid_moves) == 1:
+            return valid_moves[0]
         
-        # Учет связности с другими камнями
-        connected_stones = self.count_connected_stones(x, y, player)
-        score += connected_stones * 100
+        depth = max(2, min(self.difficulty // 2, 5))
+        print(depth)
+        _, move, decision_tree = self.minimax(depth, float('-inf'), float('inf'), True)
+        
+        # Визуализируем дерево решений
+        self.visualize_decision_tree(decision_tree)
+        
+        return move if move else valid_moves[0]
 
-        return score
+    def minimax(self, depth: int, alpha: float, beta: float, maximizing: bool) -> Tuple[int, Optional[Tuple[int, int]], Optional[nx.DiGraph]]:
+        if depth == 0 or self.is_winner(self.current_player) or self.is_winner(-self.current_player):
+            return self.evaluate_board(), None, None
 
-    def count_connected_stones(self, x: int, y: int, player: int) -> int:
-        """Подсчитывает количество связанных камней в радиусе 2."""
-        count = 0
-        for dx in range(-2, 3):
-            for dy in range(-2, 3):
-                nx, ny = x + dx, y + dy
-                if 0 <= nx < self.size and 0 <= ny < self.size and self.board[nx][ny] == player:
-                    count += 1
-        return count
+        valid_moves = self.get_valid_moves()
+        if not valid_moves:
+            return 0, None, None
+
+        best_move = valid_moves[0]
+        decision_tree = nx.DiGraph()
+        
+        # Создаем уникальный идентификатор для текущего состояния
+        current_state = f"D{depth}\n{'MAX' if maximizing else 'MIN'}"
+        decision_tree.add_node(current_state)
+        
+        if maximizing:
+            max_eval = float('-inf')
+            for move in valid_moves:
+                self.board[move[0]][move[1]] = self.current_player
+                self.current_player *= -1
+                
+                eval_score, _, subtree = self.minimax(depth - 1, alpha, beta, False)
+                
+                self.current_player *= -1
+                self.board[move[0]][move[1]] = 0
+                
+                if eval_score > max_eval:
+                    max_eval = eval_score
+                    best_move = move
+                alpha = max(alpha, eval_score)
+                
+                # Добавляем ребро в дерево решений
+                child_state = f"D{depth-1}\n{eval_score}"
+                decision_tree.add_node(child_state)
+                decision_tree.add_edge(current_state, child_state, 
+                                    label=f"({move[0]},{move[1]})")
+                
+                if subtree:
+                    # Объединяем поддерево с текущим деревом
+                    decision_tree = nx.compose(decision_tree, subtree)
+                
+                if beta <= alpha:
+                    break
+                
+            return max_eval, best_move, decision_tree
+        else:
+            min_eval = float('inf')
+            for move in valid_moves:
+                self.board[move[0]][move[1]] = self.current_player
+                self.current_player *= -1
+                
+                eval_score, _, subtree = self.minimax(depth - 1, alpha, beta, True)
+                
+                self.current_player *= -1
+                self.board[move[0]][move[1]] = 0
+                
+                if eval_score < min_eval:
+                    min_eval = eval_score
+                    best_move = move
+                beta = min(beta, eval_score)
+                
+                # Добавляем ребро в дерево решений
+                child_state = f"D{depth-1}\n{eval_score}"
+                decision_tree.add_node(child_state)
+                decision_tree.add_edge(current_state, child_state, 
+                                    label=f"({move[0]},{move[1]})")
+                
+                if subtree:
+                    # Объединяем поддерево с текущим деревом
+                    decision_tree = nx.compose(decision_tree, subtree)
+                
+                if beta <= alpha:
+                    break
+                
+            return min_eval, best_move, decision_tree
 
     def evaluate_board(self) -> int:
+        # Оценка текущего состояния доски
+        if self.last_move is None:
+            return 0
+            
+        x, y = self.last_move
         score = 0
-        for i in range(self.size):
-            for j in range(self.size):
+        for i in range(max(0, x-2), min(self.size, x+3)):
+            for j in range(max(0, y-2), min(self.size, y+3)):
                 if self.board[i][j] != 0:
                     if self.board[i][j] == self.current_player:
                         score += self.evaluate_position(i, j, self.current_player)
@@ -144,153 +241,16 @@ class Gomoku:
                         score -= self.evaluate_position(i, j, -self.current_player)
         return score
 
-    def find_winning_move(self, player: int) -> Optional[Tuple[int, int]]:
-        for i in range(self.size):
-            for j in range(self.size):
-                if self.board[i][j] == 0:
-                    self.board[i][j] = player
-                    if self.is_winner(player):
-                        self.board[i][j] = 0
-                        return (i, j)
-                    self.board[i][j] = 0
-        return None
-
-    def get_valid_moves(self) -> List[Tuple[int, int]]:
-        if self.move_count == 0:
-            return [(self.size // 2, self.size // 2)]
-
-        winning_move = self.find_winning_move(self.current_player)
-        if winning_move:
-            return [winning_move]
-
-        blocking_move = self.find_winning_move(-self.current_player)
-        if blocking_move:
-            return [blocking_move]
-        
-        moves = []
-        seen = set()
-        
-        # Расширенный радиус поиска вокруг существующих камней
-        search_radius = 3 if self.move_count < 30 else 2
-        
-        for i in range(self.size):
-            for j in range(self.size):
-                if self.board[i][j] != 0:
-                    for di in range(-search_radius, search_radius + 1):
-                        for dj in range(-search_radius, search_radius + 1):
-                            ni, nj = i + di, j + dj
-                            if (ni, nj) not in seen and 0 <= ni < self.size and 0 <= nj < self.size and self.board[ni][nj] == 0:
-                                attack_score = self.evaluate_position(ni, nj, self.current_player)
-                                defense_score = self.evaluate_position(ni, nj, -self.current_player)
-                                history_score = self.history_table.get((ni, nj), 0)
-                                score = max(attack_score, defense_score) + history_score
-                                moves.append((score, (ni, nj)))
-                                seen.add((ni, nj))
-        
-        moves.sort(reverse=True)
-        num_moves = max(5, min(20, self.difficulty * 3))
-        return [move for _, move in moves[:num_moves]]
-
-    def get_search_depth(self) -> int:
-        """Динамическая глубина поиска в зависимости от стадии игры."""
-        empty_cells = self.size * self.size - self.move_count
-        if empty_cells < 30:  # Эндшпиль
-            return min(self.difficulty + 2, 7)
-        elif empty_cells < 100:  # Мидгейм
-            return min(self.difficulty + 1, 6)
-        else:  # Начало игры
-            return max(2, min(self.difficulty // 2, 5))
-
     def is_winner(self, player: int) -> bool:
-        for i in range(self.size):
-            for j in range(self.size):
-                if self.board[i][j] == player:
-                    for dx, dy in self.directions:
-                        count = 1
-                        # Проверяем в одном направлении
-                        x1, y1 = i + dx, j + dy
-                        while 0 <= x1 < self.size and 0 <= y1 < self.size and self.board[x1][y1] == player:
-                            count += 1
-                            x1 += dx
-                        # Проверяем в противоположном направлении
-                        x1, y1 = i - dx, j - dy
-                        while 0 <= x1 < self.size and 0 <= y1 < self.size and self.board[x1][y1] == player:
-                            count += 1
-                            x1 -= dx
-                        if count >= self.win_length:
-                            return True
-        return False
-
-
-    def make_move(self, x: int, y: int) -> bool:
-        if 0 <= x < self.size and 0 <= y < self.size and self.board[x][y] == 0:
-            self.board[x][y] = self.current_player
-            self.move_count += 1
-            self.pattern_cache.clear()
-            self.threat_cache.clear()
-            return True
-        return False
-
-    def minimax(self, depth: int, alpha: float, beta: float, maximizing: bool) -> Tuple[int, Optional[Tuple[int, int]]]:
-        if depth == 0:
-            return self.evaluate_board(), None
-
-        moves = self.get_valid_moves()
-        moves.sort(key=lambda m: self.history_table.get((m[0], m[1]), 0), reverse=True)
-
-        if maximizing:
-            max_eval = float('-inf')
-            best_move = None
-            for move in moves:
-                self.board[move[0]][move[1]] = self.current_player
-                self.current_player *= -1
-                eval_score, _ = self.minimax(depth - 1, alpha, beta, False)
-                self.current_player *= -1
-                self.board[move[0]][move[1]] = 0
-                
-                if eval_score > max_eval:
-                    max_eval = eval_score
-                    best_move = move
-                    self.history_table[(move[0], move[1])] = self.history_table.get((move[0], move[1]), 0) + 2 ** depth
-                
-                alpha = max(alpha, eval_score)
-                if beta <= alpha:
-                    break
-            return max_eval, best_move
-        else:
-            min_eval = float('inf')
-            best_move = None
-            for move in moves:
-                self.board[move[0]][move[1]] = self.current_player
-                self.current_player *= -1
-                eval_score, _ = self.minimax(depth - 1, alpha, beta, True)
-                self.current_player *= -1
-                self.board[move[0]][move[1]] = 0
-                
-                if eval_score < min_eval:
-                    min_eval = eval_score
-                    best_move = move
-                    self.history_table[(move[0], move[1])] = self.history_table.get((move[0], move[1]), 0) + 2 ** depth
-                
-                beta = min(beta, eval_score)
-                if beta <= alpha:
-                    break
-            return min_eval, best_move
-
-    def get_ai_move(self) -> Tuple[int, int]:
-        winning_move = self.find_winning_move(self.current_player)
-        if winning_move:
-            return winning_move
-            
-        blocking_move = self.find_winning_move(-self.current_player)
-        if blocking_move:
-            return blocking_move
-        
-        depth = self.get_search_depth()
-        _, move = self.minimax(depth, float('-inf'), float('inf'), True)
-        return move if move else self.get_valid_moves()[0]
+        # Проверка, выиграл ли игрок
+        if self.last_move is None:
+            return False
+        x, y = self.last_move
+        return any(self.check_sequence(x, y, dx, dy, player)[0] >= self.win_length 
+                  for dx, dy in self.directions)
 
     def print_board(self):
+        # Печать доски
         symbols = {0: '.', 1: 'X', -1: 'O'}
         print('   ', end='')
         for i in range(self.size):
@@ -302,9 +262,43 @@ class Gomoku:
             for j in range(self.size):
                 print(f' {symbols[self.board[i][j]]}', end=' ')
             print()
+    
+    def visualize_decision_tree(self, decision_tree: nx.DiGraph):
+        if decision_tree is None or len(decision_tree) == 0:
+            return
+            
+        plt.figure(figsize=(15, 10))
+        pos = nx.spring_layout(decision_tree, k=1, iterations=50)
+        
+        # Рисуем узлы
+        nx.draw_networkx_nodes(decision_tree, pos, 
+                             node_color='lightblue',
+                             node_size=2000)
+        
+        # Рисуем ребра
+        nx.draw_networkx_edges(decision_tree, pos, 
+                             edge_color='gray',
+                             arrows=True,
+                             arrowsize=20)
+        
+        # Добавляем метки узлов
+        nx.draw_networkx_labels(decision_tree, pos,
+                              font_size=8)
+        
+        # Добавляем метки ребер
+        edge_labels = nx.get_edge_attributes(decision_tree, 'label')
+        nx.draw_networkx_edge_labels(decision_tree, pos,
+                                   edge_labels=edge_labels,
+                                   font_size=6)
+        
+        plt.title("Дерево решений AI")
+        plt.axis('off')
+        plt.show()
 
 def play_game():
-    difficulty = int(input("Выберите сложность от 1 до 10 (1 - очень легко, 10 - очень сложно): "))
+    # Функция для игры в Гомоку
+    print("Выберите сложность игры:")
+    difficulty = int(input("Введите число от 1 до 10: "))
     while not 1 <= difficulty <= 10:
         print("Неверная сложность! Выберите число от 1 до 10.")
         difficulty = int(input("Выберите сложность от 1 до 10: "))
@@ -324,7 +318,7 @@ def play_game():
         
         if game.current_player == 1:
             try:
-                row = int(input("Введите номер строки: "))
+                row = int(input("\nВведите номер строки: "))
                 col = int(input("Введите номер столбца: "))
                 if not game.make_move(row, col):
                     print("Недопустимый ход! Попробуйте снова.")
@@ -333,7 +327,7 @@ def play_game():
                 print("Пожалуйста, введите числа!")
                 continue
         else:
-            print("Компьютер думает...")
+            print("\nКомпьютер думает...")
             start_time = time.time()
             row, col = game.get_ai_move()
             think_time = time.time() - start_time
@@ -343,16 +337,15 @@ def play_game():
         if game.is_winner(game.current_player):
             game.print_board()
             winner = "Игрок" if game.current_player == 1 else "Компьютер"
-            print(f"{winner} победил!")
+            print(f"\n{winner} победил!")
             break
         
         if game.move_count == game.size * game.size:
             game.print_board()
-            print("Ничья!")
+            print("\nНичья!")
             break
         
         game.current_player *= -1
-
 
 if __name__ == "__main__":
     play_game()
