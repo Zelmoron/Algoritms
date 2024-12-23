@@ -26,7 +26,7 @@ class Gomoku:
             5: 1_000_000,
             4: 100_000,
             '4b': 10_000,
-            3: 1_000,
+            3: 2_000,
             '3b': 100,
             2: 10,
             '2b': 1
@@ -140,12 +140,12 @@ class Gomoku:
         if len(valid_moves) == 1:
             return valid_moves[0]
         
-        depth = max(2, min(self.difficulty // 2, 5))
+        depth = max(2, min(self.difficulty // 2, 6))
         print(depth)
         _, move, decision_tree = self.minimax(depth, float('-inf'), float('inf'), True)
         
         # Визуализируем дерево решений
-        self.visualize_decision_tree(decision_tree)
+        # self.visualize_decision_tree(decision_tree)
         
         return move if move else valid_moves[0]
 
@@ -298,10 +298,10 @@ class Gomoku:
 def play_game():
     # Функция для игры в Гомоку
     print("Выберите сложность игры:")
-    difficulty = int(input("Введите число от 1 до 10: "))
-    while not 1 <= difficulty <= 10:
-        print("Неверная сложность! Выберите число от 1 до 10.")
-        difficulty = int(input("Выберите сложность от 1 до 10: "))
+    difficulty = int(input("Введите число от 1 до 12: "))
+    while not 1 <= difficulty <= 12:
+        print("Неверная сложность! Выберите число от 1 до 12.")
+        difficulty = int(input("Выберите сложность от 1 до 12: "))
         
     game = Gomoku(difficulty=difficulty)
     
